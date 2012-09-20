@@ -1,3 +1,16 @@
 = amanzi
 
 This is a testbed for redmine extensions of interest to Amanzi
+
+Current features
+* Macros for the wiki:
+** Toolbar of child pages (extension of child_pages macro)
+** Toolbar and list of version wiki pages (wiki navigation of versions)
+** Templates
+** Embed YouTube videos
+** Embed Vimeo videos
+** Embed Photowidget
+
+Things to consider:
+* Macro for adding raphael graphs to wiki pages
+* Macro for adding graphviz content directly in wiki pages
