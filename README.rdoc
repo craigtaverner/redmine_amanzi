@@ -1,0 +1,3 @@
+= amanzi
+
+This is a testbed for redmine extensions of interest to Amanzi
