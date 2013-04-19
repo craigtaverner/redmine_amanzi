@@ -116,6 +116,10 @@ Dispatcher.to_prepare do
       out = textilizable(page.content, :text, :attachments => page.attachments)
       @included_wiki_pages.pop
 
+      if args.length < 1
+        args << "PROJECT=#{@project.name}"
+        args << "IDENTIFIER=#{@project.identifier}"
+      end
       args.collect do |v|
         v[/(\w+)\W*\=\W*(.+)$/]
         key = $1
