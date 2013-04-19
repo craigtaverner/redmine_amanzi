@@ -1,7 +1,108 @@
 # Dependency loading hell. http://www.ruby-forum.com/topic/166578#new
 require 'dispatcher'
+require "net/http"
+require "uri"
+require "json"
+
 Dispatcher.to_prepare do
   Redmine::WikiFormatting::Macros.class_eval do
+
+    # Include another web-page
+    desc "Inline another web page. Example:\n\n !{{inline(URL)}}."
+    macro :inline do |obj, args|
+      puts "INLINE: Args=[#{args.join(', ')}]"
+      args.each_with_index do |arg,i|
+        puts "INLINE[#{i}]:    #{arg}"
+      end
+      external_link = args.shift
+      if external_link =~ /\"(http:\/\/[^\"]+)(\"|$)/
+        url = $1
+        url.gsub!(/x\%x\%/,'&')
+        if url=~/\.json($|\?)/
+          puts "INLINE: JSON: #{url}"
+          begin
+            uri = URI.parse(url)
+            response = Net::HTTP.get_response(uri)
+            json = JSON.parse(response.body)
+          rescue
+            puts "INLINE: Failed to parse '#{url}': #{$!}"
+          end
+          if((res=args.grep(/path\=/)).length>0)
+            puts "INLINE: Searching path: #{res.inspect}"
+            value=res[0].split(/[\=\"]/)[1]
+            value = "geoptima.device-config.#{value}" unless(value=~/geoptima\.device-config\./)
+            puts "INLINE: Searching path: #{value}"
+            value.split(/\./).each do |field|
+              last unless(json)
+              puts "INLINE: Searching path field: #{field}"
+              if field =~ /([^\[]+)\[([^\]]+)\]/
+                field,key = $1,$2
+                key,value = key.split(/\:/)
+                puts "Searching for path='#{field}' with key,value=[#{key}:#{value}] in JSON='#{json.to_s[0..50]}..'"
+                json = json[field]
+                if json.respond_to? :find
+                  json = json.find{|x| x[key].to_s == value.to_s}
+                end
+              else
+                puts "Searching for path='#{field}' in JSON='#{json.to_s[0..50]}..'"
+                json = json[field]
+              end
+            end
+          end
+          style=[]
+          if((res=args.grep(/(width|height)\=/)).length>0)
+            key,value=res[0].split(/[\=\"]/)[0..1]
+            puts "INLINE: Got style: #{key}:#{value}"
+            style << "#{key}:#{value}"
+          end
+          "<pre style=\"#{style.join(';')}\"><code class=\"javascript\">#{json && JSON.pretty_generate(json)}</code></pre>"
+        else
+          style=[]
+          style=["width","height"].map do |key|
+            value="100%"
+            if((res=args.grep(/#{key}\=/)).length>0)
+              value=res[0].split(/[\=\"]/)[1]
+              puts "INLINE: Got style: #{key}:#{value}"
+            end
+            "#{key}:#{value}"
+          end.join(';')
+          "<div class=\"inline\"><iframe style=\"#{style}\" src=\"#{url}\"></iframe></div>"
+        end
+      else
+        external_link
+      end
+    end
+
+    # Tooltips
+    desc "Add text with a classic tooltip. Example:\n\n !{{tt(Label,Text)}}."
+    macro :tt do |obj, args|
+      label = args.shift
+      "<a class=\"tooltip\" href=\"#\">#{label}<span class=\"classic\">#{args.join(', ')}</span></a>"
+    end
+
+    desc "Add text with help tooltip. Example:\n\n !{{tt_info(Label,Text)}}."
+    macro :tt_help do |obj, args|
+      label = args.shift
+      "<a class=\"tooltip\" href=\"#\">#{label}<span class=\"custom help\"><img src=\"/plugin_assets/redmine_amanzi/images/Help.png\" alt=\"#{label}\" height=\"48\" width=\"48\" /><em>#{label}</em>#{args.join(', ')}</span></a>"
+    end
+
+    desc "Add text with an info tooltip. Example:\n\n !{{tt_info(Label,Text)}}."
+    macro :tt_info do |obj, args|
+      label = args.shift
+      "<a class=\"tooltip\" href=\"#\">#{label}<span class=\"custom info\"><img src=\"/plugin_assets/redmine_amanzi/images/Info.png\" alt=\"#{label}\" height=\"48\" width=\"48\" /><em>#{label}</em>#{args.join(', ')}</span></a>"
+    end
+
+    desc "Add text with a warning tooltip. Example:\n\n !{{tt_info(Label,Text)}}."
+    macro :tt_warning do |obj, args|
+      label = args.shift
+      "<a class=\"tooltip\" href=\"#\">#{label}<span class=\"custom warning\"><img src=\"/plugin_assets/redmine_amanzi/images/Warning.png\" alt=\"#{label}\" height=\"48\" width=\"48\" /><em>#{label}</em>#{args.join(', ')}</span></a>"
+    end
+
+    desc "Add text with an error tooltip. Example:\n\n !{{tt_error(Label,Text)}}."
+    macro :tt_critical do |obj, args|
+      label = args.shift
+      "<a class=\"tooltip\" href=\"#\">#{label}<span class=\"custom critical\"><img src=\"/plugin_assets/redmine_amanzi/images/Critical.png\" alt=\"#{label}\" height=\"48\" width=\"48\" /><em>#{label}</em>#{args.join(', ')}</span></a>"
+    end
 
     # wiki template macro
     desc "Replace token inside a template. Example:\n\n !{{template(WikiTemplatePage,token=foo,token2=bar)}}."
@@ -22,6 +123,56 @@ Dispatcher.to_prepare do
         out = out.gsub(key, value)
       end
       out
+    end
+
+    desc "Embed a Raphael graph, with token replacement. Example:\n\n !{{raphael(WikiTemplatePage,token=foo,token2=bar)}}."
+    macro :raphael do |obj, args|
+      page = Wiki.find_page(args.shift.to_s, :project => @project)
+      raise 'Page not found' if page.nil? || !User.current.allowed_to?(:view_wiki_pages, page.wiki.project)
+
+      graph_id = "raphael_#{page.id}"
+
+      tokens = {'graph_id', graph_id}
+      width = 200
+      height = 200
+      args.each do |arg|
+        if arg=~/width\s*\=\s*(\d+)/
+          width=$1.to_i
+        elsif arg=~/height\s*\=\s*(\d+)/
+          height=$1.to_i
+        end
+        if arg=~/(\w+)\W*\=\W*(.+)$/
+          key = $1
+          value = $2.strip.gsub("<br />", "")
+          tokens[key] = value
+        end
+      end
+
+      out = page.content.text
+      if out =~ /\<pre/i
+        out = out.gsub(/^[\s\S]*\<pre\>/i,'').gsub(/\<\/pre\>[\s\S]*$/,'')
+        out = out.gsub(/^\s*\<code[^>]*\>/i,'').gsub(/\<\/code\>\s*$/i,'')
+      end
+
+      tokens.each do |key,value|
+        out = out.gsub(key, value)
+      end
+
+      style = ["display:block"]
+      style << "width:#{width}px" if(width)
+      style << "height:#{height}px" if(height)
+
+      <<EOOUT
+<div id="#{graph_id}" style="#{style.join(';')}">
+  <script type="text/javascript">
+
+var paper = Raphael(#{graph_id}, #{width}, #{height});
+
+#{out}
+
+  </script>
+</div>
+EOOUT
     end
 
     desc "Displays a toolbar of child pages. With no argument, it displays the child pages of the current wiki page. Examples:\n\n" +
@@ -74,8 +225,8 @@ Dispatcher.to_prepare do
         end
       end
       if use_hd
-        width = 695 if(width.nil?  || width.to_i  < 100)
-        height =525 if(height.nil? || height.to_i < 100)
+        width = 850 if(width.nil?  || width.to_i  < 100)
+        height =480 if(height.nil? || height.to_i < 100)
         video_html = '<object width="WIDTH" height="HEIGHT"><param name="movie" value="http://www.youtube.com/v/VIDEO_ID&hl=en_US&fs=1&hd=1&border=1"></param><param name="allowFullScreen" value="true"></param><param name="allowscriptaccess" value="always"></param><embed src="http://www.youtube.com/v/VIDEO_ID&hl=en_US&fs=1&hd=1" type="application/x-shockwave-flash" allowscriptaccess="always" allowfullscreen="true" width="WIDTH" height="HEIGHT"></embed></object>'
       else
         width = 435 if(width.nil?  || width.to_i  < 100)
